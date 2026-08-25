@@ -13,10 +13,12 @@ namespace BossDetect
     /// 客户端 BOSS 检测核心：
     /// 1. 每 1 秒扫描 GameWorld.AllAlivePlayersList，识别 BOSS（复用旧 BossPanel 的判定规则）。
     /// 2. 读取玩家 Profile.Hideout 中情报中心(IntelligenceCenter)等级。
-    /// 3. 按等级用游戏内 Notify 通知：
-    ///    1级：仅提示 BOSS 存在，无法探测位置。
-    ///    2级：提示远近描述词（25/50/75/100/150/200m 分档），档次变化时重新通知。
-    ///    3级：实时显示精确距离（米），按配置间隔与最小变化量刷新。
+    /// 3. 通知时机：
+    ///    - 游戏开局（倒计时结束后，即局内计时器 GameTimer 启动）自动提示一次；
+    ///    - 之后所有通知均需按下快捷键 O 手动触发，并按情报中心等级执行冷却：
+    ///      1级 10 秒 / 2级 30 秒 / 3级 10 秒。
+    /// 4. 通知内容按等级区分：
+    ///    1级：无法探测位置；2级：远近描述词；3级：精确距离（米）。
     /// </summary>
     public static class BossDetector
     {
@@ -27,16 +29,6 @@ namespace BossDetect
             public Player PlayerRef;
             public bool Alive = true;
             public float LastDistance;
-
-            // 1级：每个 BOSS 每局只通知一次
-            public bool Level1Notified;
-
-            // 2级：远近档位缓存，档位变化才重新通知
-            public int LastTier = -1;
-
-            // 3级：实时距离刷新状态
-            public float LastLiveNotifyTime;
-            public float LastLiveNotifyDistance = -1f;
         }
 
         private static readonly string[] TierWords =
@@ -50,11 +42,15 @@ namespace BossDetect
         private static GameWorld _currentGameWorld;
         private static int _intelLevel;
         private static float _lastScanTime;
+        private static float _lastManualNotifyTime = -1000f;
+        private static bool _startNotified;
 
         public static ConfigEntry<bool> Enabled;
+        public static ConfigEntry<KeyboardShortcut> Hotkey;
         public static ConfigEntry<int> IntelLevelOverride;
-        public static ConfigEntry<float> LiveRefreshInterval;
-        public static ConfigEntry<float> LiveMinDelta;
+        public static ConfigEntry<float> CooldownLevel1;
+        public static ConfigEntry<float> CooldownLevel2;
+        public static ConfigEntry<float> CooldownLevel3;
         public static ConfigEntry<bool> DebugLog;
 
         public static void Init(ConfigFile config, ManualLogSource log)
@@ -64,20 +60,28 @@ namespace BossDetect
             Enabled = config.Bind("Boss Detect / 敌对首领检测", "启用", true,
                 "是否启用 BOSS 检测通知。");
 
+            Hotkey = config.Bind("Boss Detect / 敌对首领检测", "手动通知快捷键", new KeyboardShortcut(KeyCode.O, new KeyCode[0]),
+                "开局提示后，按此键手动获取 BOSS 情报。");
+
             IntelLevelOverride = config.Bind("Boss Detect / 敌对首领检测", "情报中心等级覆盖", -1,
                 new ConfigDescription(
                     "手动指定情报中心等级(1/2/3)用于测试，-1 为自动读取玩家藏身处真实等级。",
                     new AcceptableValueRange<int>(-1, 3)));
 
-            LiveRefreshInterval = config.Bind("Boss Detect / 敌对首领检测", "3级实时刷新间隔(秒)", 5f,
+            CooldownLevel1 = config.Bind("Boss Detect / 敌对首领检测", "1级冷却(秒)", 10f,
                 new ConfigDescription(
-                    "情报中心 3 级时，实时距离通知的刷新间隔。",
-                    new AcceptableValueRange<float>(1f, 60f)));
+                    "情报中心 1 级时，手动通知的冷却时间。",
+                    new AcceptableValueRange<float>(0f, 300f)));
 
-            LiveMinDelta = config.Bind("Boss Detect / 敌对首领检测", "3级最小距离变化(米)", 5f,
+            CooldownLevel2 = config.Bind("Boss Detect / 敌对首领检测", "2级冷却(秒)", 30f,
                 new ConfigDescription(
-                    "距离相对上次通知变化超过该值才刷新实时通知，避免刷屏。",
-                    new AcceptableValueRange<float>(1f, 500f)));
+                    "情报中心 2 级时，手动通知的冷却时间。",
+                    new AcceptableValueRange<float>(0f, 300f)));
+
+            CooldownLevel3 = config.Bind("Boss Detect / 敌对首领检测", "3级冷却(秒)", 10f,
+                new ConfigDescription(
+                    "情报中心 3 级时，手动通知的冷却时间。",
+                    new AcceptableValueRange<float>(0f, 300f)));
 
             DebugLog = config.Bind("Boss Detect / 敌对首领检测", "调试日志", false,
                 "输出详细调试日志。");
@@ -108,15 +112,34 @@ namespace BossDetect
                 OnNewRaid(gameWorld, myPlayer);
             }
 
-            if (Time.time - _lastScanTime < 1f) return;
-            _lastScanTime = Time.time;
+            // 定期扫描花名册（只更新数据，不自动发通知）
+            if (Time.time - _lastScanTime >= 1f)
+            {
+                _lastScanTime = Time.time;
+                ScanRoster(gameWorld, myPlayer);
+            }
 
-            ScanAndNotify(gameWorld, myPlayer);
+            // 开局通知：倒计时结束（局内计时器启动）后提示一次
+            if (!_startNotified && IsCountdownOver())
+            {
+                _startNotified = true;
+                ScanRoster(gameWorld, myPlayer);
+                LogDebug("倒计时结束，发送开局 BOSS 情报");
+                NotifyCurrentBosses();
+            }
+
+            // 手动通知：按快捷键 O
+            if (Hotkey.Value.IsDown())
+            {
+                TryManualNotify();
+            }
         }
 
         private static void OnNewRaid(GameWorld gameWorld, Player myPlayer)
         {
             _currentGameWorld = gameWorld;
+            _startNotified = false;
+            _lastManualNotifyTime = -1000f;
             Roster.Clear();
             _intelLevel = ResolveIntelCenterLevel(myPlayer);
             LogDebug($"进入地图 {gameWorld.LocationId}，情报中心等级 = {_intelLevel}");
@@ -126,11 +149,31 @@ namespace BossDetect
         {
             LogDebug("离开对局，清空 BOSS 花名册");
             _currentGameWorld = null;
+            _startNotified = false;
+            _lastManualNotifyTime = -1000f;
             Roster.Clear();
             _intelLevel = 0;
         }
 
-        private static void ScanAndNotify(GameWorld gameWorld, Player myPlayer)
+        /// <summary>
+        /// 倒计时结束信号：本地/联机对局都是在部署倒计时（TimeBeforeDeployLocal）结束后才启动
+        /// 局内计时器（GameTimerClass.Start → Status = Started），因此以 GameTimer 状态为准。
+        /// </summary>
+        private static bool IsCountdownOver()
+        {
+            try
+            {
+                if (!Singleton<AbstractGame>.Instantiated) return false;
+                GameTimerClass timer = Singleton<AbstractGame>.Instance.GameTimer;
+                return timer != null && timer.Status == GameTimerClass.EGameTimerStatus.Started;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void ScanRoster(GameWorld gameWorld, Player myPlayer)
         {
             HashSet<string> seenProfileIds = new HashSet<string>();
 
@@ -157,16 +200,8 @@ namespace BossDetect
                     LogDebug($"发现新 BOSS：{record.Name} ({profileId})");
                 }
 
-                // 重新出现（如复活/重刷）时重置通知状态
-                if (!record.Alive)
-                {
-                    record.Alive = true;
-                    record.Level1Notified = false;
-                    record.LastTier = -1;
-                    record.LastLiveNotifyDistance = -1f;
-                    LogDebug($"BOSS 重新出现：{record.Name}");
-                }
-
+                // 重新出现（如复活/重刷）时恢复存活状态
+                record.Alive = true;
                 record.PlayerRef = player;
 
                 if (player.Transform != null && myPlayer.Transform != null)
@@ -177,11 +212,6 @@ namespace BossDetect
                 if (player.HealthController != null && !player.HealthController.IsAlive)
                 {
                     record.Alive = false;
-                }
-
-                if (record.Alive)
-                {
-                    NotifyForRecord(record);
                 }
             }
 
@@ -197,40 +227,72 @@ namespace BossDetect
             }
         }
 
-        private static void NotifyForRecord(BossRecord record)
+        private static void TryManualNotify()
+        {
+            if (_currentGameWorld == null) return;
+
+            float cooldown = GetCooldownSeconds();
+            float elapsed = Time.time - _lastManualNotifyTime;
+            if (elapsed < cooldown)
+            {
+                LogDebug($"手动通知冷却中，剩余 {Mathf.CeilToInt(cooldown - elapsed)} 秒");
+                return;
+            }
+
+            _lastManualNotifyTime = Time.time;
+
+            if (!Singleton<GameWorld>.Instantiated) return;
+            GameWorld gameWorld = Singleton<GameWorld>.Instance;
+            if (gameWorld == null || gameWorld.MainPlayer == null) return;
+
+            ScanRoster(gameWorld, gameWorld.MainPlayer);
+            NotifyCurrentBosses();
+        }
+
+        private static float GetCooldownSeconds()
         {
             switch (_intelLevel)
             {
-                case 1:
-                    if (!record.Level1Notified)
-                    {
-                        record.Level1Notified = true;
+                case 1: return CooldownLevel1.Value;
+                case 2: return CooldownLevel2.Value;
+                case 3: return CooldownLevel3.Value;
+                default: return 0f;
+            }
+        }
+
+        private static void NotifyCurrentBosses()
+        {
+            if (_intelLevel < 1)
+            {
+                LogDebug("情报中心等级不足(0)，不发送通知");
+                return;
+            }
+
+            bool any = false;
+            foreach (var record in Roster.Values)
+            {
+                if (!record.Alive) continue;
+                any = true;
+
+                switch (_intelLevel)
+                {
+                    case 1:
                         Notify(string.Format(NotifyText.Level1, record.Name));
-                    }
-                    break;
+                        break;
 
-                case 2:
-                    int tier = DistanceTier(record.LastDistance);
-                    if (tier != record.LastTier)
-                    {
-                        record.LastTier = tier;
-                        Notify(string.Format(NotifyText.Level2, record.Name, TierWords[tier]));
-                    }
-                    break;
+                    case 2:
+                        Notify(string.Format(NotifyText.Level2, record.Name, TierWords[DistanceTier(record.LastDistance)]));
+                        break;
 
-                case 3:
-                    int meters = Mathf.RoundToInt(record.LastDistance);
-                    bool first = record.LastLiveNotifyDistance < 0f;
-                    bool intervalElapsed = Time.time - record.LastLiveNotifyTime >= LiveRefreshInterval.Value;
-                    bool movedEnough = Mathf.Abs(meters - record.LastLiveNotifyDistance) >= LiveMinDelta.Value;
+                    case 3:
+                        Notify(string.Format(NotifyText.Level3, record.Name, Mathf.RoundToInt(record.LastDistance)));
+                        break;
+                }
+            }
 
-                    if (first || (intervalElapsed && movedEnough))
-                    {
-                        record.LastLiveNotifyTime = Time.time;
-                        record.LastLiveNotifyDistance = meters;
-                        Notify(string.Format(NotifyText.Level3, record.Name, meters));
-                    }
-                    break;
+            if (!any)
+            {
+                LogDebug("当前未检测到 BOSS");
             }
         }
 

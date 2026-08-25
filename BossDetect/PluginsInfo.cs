@@ -4,6 +4,6 @@ namespace BossDetect
     {
         public const string GUID = "com.mochix2milk.bossdetect";
         public const string NAME = "Boss Detect";
-        public const string VERSION = "1.0.0";
+        public const string VERSION = "1.1.0";
     }
 }
