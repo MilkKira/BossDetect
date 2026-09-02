@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using BepInEx.Configuration;
 using BepInEx.Logging;
 using Comfort.Common;
 using EFT;
@@ -10,24 +9,39 @@ using UnityEngine;
 namespace BossDetect
 {
     /// <summary>
-    /// 客户端 BOSS 检测核心：
-    /// 1. 每 1 秒扫描 GameWorld.AllAlivePlayersList，识别 BOSS（复用旧 BossPanel 的判定规则）。
-    /// 2. 读取玩家 Profile.Hideout 中情报中心(IntelligenceCenter)等级。
-    /// 3. 通知时机：
-    ///    - 游戏开局（倒计时结束后，即局内计时器 GameTimer 启动）自动提示一次；
-    ///    - 之后所有通知均需按下快捷键 O 手动触发，并按情报中心等级执行冷却：
-    ///      1级 10 秒 / 2级 30 秒 / 3级 10 秒。
-    /// 4. 通知内容按等级区分：
-    ///    1级：无法探测位置；2级：远近描述词；3级：精确距离（米）。
+    /// 客户端 BOSS 情报核心。通用规则：
+    /// - 通知时机：倒计时结束（局内计时器 GameTimer 启动）后自动播报一次；之后按快捷键 O 手动扫描。
+    /// - 情报错误：战局实际刷新了 BOSS，但每次播报有概率不推送（多 BOSS 各自独立判定）。
+    /// - 分级冷却：1级 120s / 2级 90s / 3级 60s。
+    /// - 检测限制：1、2 级无法识别特殊目标（黑狐/伟哥/典狱长），3 级仅播报是否刷新、不显示位置。
+    /// - 附加能力：1 级不能检测 BOSS 死亡；2、3 级可在扫描时播报死亡。
+    /// - 乱码：2 级 10%、3 级 2% 概率距离以乱码形式描述（通知无法滚动，按静态乱码呈现）。
+    /// - 所有参数写死在下方常量区，不使用 BepInEx Config。
     /// </summary>
     public static class BossDetector
     {
+        // ============================ 写死参数（不使用 Config） ============================
+        private const KeyCode ManualScanKey = KeyCode.O;   // 手动扫描快捷键
+        private static readonly bool DebugLogging = false;  // 调试日志开关（写死，改源码后重新编译）
+
+        private const float CooldownSecondsLevel1 = 120f;  // 1 级情报中心冷却
+        private const float CooldownSecondsLevel2 = 90f;   // 2 级情报中心冷却
+        private const float CooldownSecondsLevel3 = 60f;   // 3 级情报中心冷却
+
+        private const int ErrorRatePercentLevel1 = 25;     // 1 级情报错误率
+        private const int ErrorRatePercentLevel2 = 10;     // 2 级情报错误率
+        private const int ErrorRatePercentLevel3 = 0;      // 3 级情报错误率
+
+        private const int GarbleRatePercentLevel2 = 10;    // 2 级距离乱码率
+        private const int GarbleRatePercentLevel3 = 2;     // 3 级距离乱码率
+        // ================================================================================
+
         private class BossRecord
         {
-            public string ProfileId;
             public string Name;
-            public Player PlayerRef;
+            public bool Special;
             public bool Alive = true;
+            public bool DeathNotified;
             public float LastDistance;
         }
 
@@ -35,6 +49,9 @@ namespace BossDetect
         {
             "很近", "近", "中近", "中", "中远", "远", "很远"
         };
+
+        // 静态“乱码”字符集，模拟情报被干扰的效果
+        private const string GarbleChars = "▓▒░█¤§¶¥€#$%&?@*~¡¿";
 
         private static readonly Dictionary<string, BossRecord> Roster = new Dictionary<string, BossRecord>();
 
@@ -45,52 +62,13 @@ namespace BossDetect
         private static float _lastManualNotifyTime = -1000f;
         private static bool _startNotified;
 
-        public static ConfigEntry<bool> Enabled;
-        public static ConfigEntry<KeyboardShortcut> Hotkey;
-        public static ConfigEntry<int> IntelLevelOverride;
-        public static ConfigEntry<float> CooldownLevel1;
-        public static ConfigEntry<float> CooldownLevel2;
-        public static ConfigEntry<float> CooldownLevel3;
-        public static ConfigEntry<bool> DebugLog;
-
-        public static void Init(ConfigFile config, ManualLogSource log)
+        public static void Init(ManualLogSource log)
         {
             _log = log;
-
-            Enabled = config.Bind("Boss Detect / 敌对首领检测", "启用", true,
-                "是否启用 BOSS 检测通知。");
-
-            Hotkey = config.Bind("Boss Detect / 敌对首领检测", "手动通知快捷键", new KeyboardShortcut(KeyCode.O, new KeyCode[0]),
-                "开局提示后，按此键手动获取 BOSS 情报。");
-
-            IntelLevelOverride = config.Bind("Boss Detect / 敌对首领检测", "情报中心等级覆盖", -1,
-                new ConfigDescription(
-                    "手动指定情报中心等级(1/2/3)用于测试，-1 为自动读取玩家藏身处真实等级。",
-                    new AcceptableValueRange<int>(-1, 3)));
-
-            CooldownLevel1 = config.Bind("Boss Detect / 敌对首领检测", "1级冷却(秒)", 10f,
-                new ConfigDescription(
-                    "情报中心 1 级时，手动通知的冷却时间。",
-                    new AcceptableValueRange<float>(0f, 300f)));
-
-            CooldownLevel2 = config.Bind("Boss Detect / 敌对首领检测", "2级冷却(秒)", 30f,
-                new ConfigDescription(
-                    "情报中心 2 级时，手动通知的冷却时间。",
-                    new AcceptableValueRange<float>(0f, 300f)));
-
-            CooldownLevel3 = config.Bind("Boss Detect / 敌对首领检测", "3级冷却(秒)", 10f,
-                new ConfigDescription(
-                    "情报中心 3 级时，手动通知的冷却时间。",
-                    new AcceptableValueRange<float>(0f, 300f)));
-
-            DebugLog = config.Bind("Boss Detect / 敌对首领检测", "调试日志", false,
-                "输出详细调试日志。");
         }
 
         public static void Update()
         {
-            if (!Enabled.Value) return;
-
             if (!Singleton<GameWorld>.Instantiated)
             {
                 if (_currentGameWorld != null) OnRaidEnded();
@@ -112,14 +90,14 @@ namespace BossDetect
                 OnNewRaid(gameWorld, myPlayer);
             }
 
-            // 定期扫描花名册（只更新数据，不自动发通知）
+            // 定期维护花名册（只更新数据，不自动发情报）
             if (Time.time - _lastScanTime >= 1f)
             {
                 _lastScanTime = Time.time;
                 ScanRoster(gameWorld, myPlayer);
             }
 
-            // 开局通知：倒计时结束（局内计时器启动）后提示一次
+            // 开局播报：倒计时结束后自动执行一次情报
             if (!_startNotified && IsCountdownOver())
             {
                 _startNotified = true;
@@ -128,10 +106,10 @@ namespace BossDetect
                 NotifyCurrentBosses();
             }
 
-            // 手动通知：按快捷键 O
-            if (Hotkey.Value.IsDown())
+            // 手动扫描
+            if (Input.GetKeyDown(ManualScanKey))
             {
-                TryManualNotify();
+                TryManualScan();
             }
         }
 
@@ -184,7 +162,12 @@ namespace BossDetect
                 var profile = player.Profile;
                 if (profile == null || profile.Info == null || profile.Info.Settings == null) continue;
 
-                if (!BossRoles.IsBoss(profile.Info.Settings.Role)) continue;
+                string role = profile.Info.Settings.Role.ToString().ToLowerInvariant();
+                bool isBoss = BossRoles.IsBoss(role);
+                bool isSpecial = BossRoles.IsSpecialBoss(role);
+
+                // 检测限制：1、2 级无法识别特殊目标（黑狐/伟哥/典狱长）
+                if (!isBoss || (isSpecial && _intelLevel < 3)) continue;
 
                 string profileId = profile.Id;
                 seenProfileIds.Add(profileId);
@@ -193,25 +176,29 @@ namespace BossDetect
                 {
                     record = new BossRecord
                     {
-                        ProfileId = profileId,
-                        Name = PlayerNameHelper.GetDisplayName(profile.Info.Nickname)
+                        Name = PlayerNameHelper.GetDisplayName(profile.Info.Nickname),
+                        Special = isSpecial
                     };
                     Roster[profileId] = record;
-                    LogDebug($"发现新 BOSS：{record.Name} ({profileId})");
+                    LogDebug($"发现新 BOSS：{record.Name} (特殊目标={isSpecial}) ({profileId})");
                 }
-
-                // 重新出现（如复活/重刷）时恢复存活状态
-                record.Alive = true;
-                record.PlayerRef = player;
 
                 if (player.Transform != null && myPlayer.Transform != null)
                 {
                     record.LastDistance = Vector3.Distance(myPlayer.Transform.position, player.Transform.position);
                 }
 
-                if (player.HealthController != null && !player.HealthController.IsAlive)
+                bool deadNow = player.HealthController != null && !player.HealthController.IsAlive;
+                if (deadNow)
                 {
                     record.Alive = false;
+                }
+                else if (!record.Alive)
+                {
+                    // 重新出现（如复活/重刷）时恢复存活状态并重置死亡播报标记
+                    record.Alive = true;
+                    record.DeathNotified = false;
+                    LogDebug($"BOSS 重新出现：{record.Name}");
                 }
             }
 
@@ -227,7 +214,7 @@ namespace BossDetect
             }
         }
 
-        private static void TryManualNotify()
+        private static void TryManualScan()
         {
             if (_currentGameWorld == null) return;
 
@@ -235,7 +222,9 @@ namespace BossDetect
             float elapsed = Time.time - _lastManualNotifyTime;
             if (elapsed < cooldown)
             {
-                LogDebug($"手动通知冷却中，剩余 {Mathf.CeilToInt(cooldown - elapsed)} 秒");
+                int remaining = Mathf.CeilToInt(cooldown - elapsed);
+                Notify(string.Format(NotifyText.Cooldown, remaining));
+                LogDebug($"手动扫描冷却中，剩余 {remaining} 秒");
                 return;
             }
 
@@ -249,50 +238,90 @@ namespace BossDetect
             NotifyCurrentBosses();
         }
 
-        private static float GetCooldownSeconds()
+        private static float GetCooldownSeconds() => _intelLevel switch
         {
-            switch (_intelLevel)
-            {
-                case 1: return CooldownLevel1.Value;
-                case 2: return CooldownLevel2.Value;
-                case 3: return CooldownLevel3.Value;
-                default: return 0f;
-            }
-        }
+            1 => CooldownSecondsLevel1,
+            2 => CooldownSecondsLevel2,
+            3 => CooldownSecondsLevel3,
+            _ => 0f
+        };
+
+        private static int GetErrorRatePercent() => _intelLevel switch
+        {
+            1 => ErrorRatePercentLevel1,
+            2 => ErrorRatePercentLevel2,
+            3 => ErrorRatePercentLevel3,
+            _ => 0
+        };
+
+        private static int GetGarbleRatePercent() => _intelLevel switch
+        {
+            2 => GarbleRatePercentLevel2,
+            3 => GarbleRatePercentLevel3,
+            _ => 0
+        };
 
         private static void NotifyCurrentBosses()
         {
             if (_intelLevel < 1)
             {
-                LogDebug("情报中心等级不足(0)，不发送通知");
+                LogDebug("情报中心等级不足(0)，不发送情报");
                 return;
             }
 
-            bool any = false;
+            int errorPercent = GetErrorRatePercent();
+            int garblePercent = GetGarbleRatePercent();
+
+            // 附加能力：2、3 级可检测 BOSS 死亡（扫描时播报一次）
+            if (_intelLevel >= 2)
+            {
+                foreach (var record in Roster.Values)
+                {
+                    if (!record.Alive && !record.DeathNotified)
+                    {
+                        record.DeathNotified = true;
+                        LogDebug($"播报 BOSS 死亡：{record.Name}");
+                        Notify(string.Format(NotifyText.BossDead, record.Name));
+                    }
+                }
+            }
+
+            // 存活 BOSS 情报：每个 BOSS 独立计算情报错误率
             foreach (var record in Roster.Values)
             {
                 if (!record.Alive) continue;
-                any = true;
+
+                if (RollChance(errorPercent))
+                {
+                    LogDebug($"情报错误：{record.Name} 已刷新但未推送提示");
+                    continue;
+                }
 
                 switch (_intelLevel)
                 {
                     case 1:
+                        // 仅提示该区域是否刷新 BOSS，不含位置/距离
                         Notify(string.Format(NotifyText.Level1, record.Name));
                         break;
 
                     case 2:
-                        Notify(string.Format(NotifyText.Level2, record.Name, TierWords[DistanceTier(record.LastDistance)]));
+                        string tier = MaybeGarble(TierWords[DistanceTier(record.LastDistance)], garblePercent);
+                        Notify(string.Format(NotifyText.Level2, record.Name, tier));
                         break;
 
                     case 3:
-                        Notify(string.Format(NotifyText.Level3, record.Name, Mathf.RoundToInt(record.LastDistance)));
+                        if (record.Special)
+                        {
+                            // 特殊目标：仅播报是否刷新，不显示位置
+                            Notify(string.Format(NotifyText.Level3Special, record.Name));
+                        }
+                        else
+                        {
+                            string distance = MaybeGarble(Mathf.RoundToInt(record.LastDistance).ToString(), garblePercent);
+                            Notify(string.Format(NotifyText.Level3, record.Name, distance));
+                        }
                         break;
                 }
-            }
-
-            if (!any)
-            {
-                LogDebug("当前未检测到 BOSS");
             }
         }
 
@@ -311,15 +340,38 @@ namespace BossDetect
             return 6;
         }
 
+        /// <summary>
+        /// 概率判定：返回 true 表示本次命中了配置的概率（触发错误/乱码等效果）。
+        /// </summary>
+        private static bool RollChance(int percent)
+        {
+            return percent > 0 && UnityEngine.Random.Range(0, 100) < percent;
+        }
+
+        /// <summary>
+        /// 按概率把文本替换成乱码；未命中时原样返回。
+        /// </summary>
+        private static string MaybeGarble(string text, int percent)
+        {
+            return RollChance(percent) ? Garble(text) : text;
+        }
+
+        /// <summary>
+        /// 乱码文本（通知无法真正滚动，按与原文字数相同的静态乱码呈现，模拟干扰效果）。
+        /// </summary>
+        private static string Garble(string source)
+        {
+            if (string.IsNullOrEmpty(source)) return source;
+            char[] chars = new char[source.Length];
+            for (int i = 0; i < chars.Length; i++)
+            {
+                chars[i] = GarbleChars[UnityEngine.Random.Range(0, GarbleChars.Length)];
+            }
+            return new string(chars);
+        }
+
         private static int ResolveIntelCenterLevel(Player myPlayer)
         {
-            // 手动覆盖优先（用于测试三个档位）
-            if (IntelLevelOverride.Value >= 1 && IntelLevelOverride.Value <= 3)
-            {
-                LogDebug($"使用配置覆盖的情报中心等级：{IntelLevelOverride.Value}");
-                return IntelLevelOverride.Value;
-            }
-
             try
             {
                 var areas = myPlayer?.Profile?.Hideout?.Areas;
@@ -365,7 +417,7 @@ namespace BossDetect
 
         private static void LogDebug(string message)
         {
-            if (DebugLog.Value)
+            if (DebugLogging)
             {
                 _log.LogInfo($"[BossDetect] {message}");
             }

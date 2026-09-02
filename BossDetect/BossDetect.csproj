@@ -6,16 +6,16 @@
 		<LangVersion>latest</LangVersion>
 		<AssemblyName>BossDetect</AssemblyName>
 		<RootNamespace>BossDetect</RootNamespace>
-		<Version>1.1.0</Version>
-		<AssemblyVersion>1.1.0.0</AssemblyVersion>
-		<FileVersion>1.1.0.0</FileVersion>
+		<Version>1.3.0</Version>
+		<AssemblyVersion>1.3.0.0</AssemblyVersion>
+		<FileVersion>1.3.0.0</FileVersion>
 		<Authors>Mochix2Milk</Authors>
 		<Company>Mochix2Milk</Company>
 		<Product>Boss Detect</Product>
 		<Description>Client-side boss detection with in-game notifications gated by Hideout Intelligence Center level.</Description>
 
 		<!-- 修改这里指向你的 SPT 客户端根目录 -->
-		<GameRoot>D:\BaiduSyncdisk\EscapeFromTarkovFiles</GameRoot>
+		<GameRoot>D:\ExfilDelta</GameRoot>
 		<OutDir>$(GameRoot)\BepInEx\plugins\BossDetect\</OutDir>
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
 		<AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>

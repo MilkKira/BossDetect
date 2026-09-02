@@ -1,5 +1,4 @@
 using BepInEx;
-using BepInEx.Logging;
 
 namespace BossDetect
 {
@@ -12,7 +11,7 @@ namespace BossDetect
     {
         private void Awake()
         {
-            BossDetector.Init(Config, Logger);
+            BossDetector.Init(Logger);
             Logger.LogInfo($"{PluginsInfo.NAME} {PluginsInfo.VERSION} loaded");
         }
 
