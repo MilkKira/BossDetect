@@ -15,7 +15,7 @@
 		<Description>Client-side boss detection with in-game notifications gated by Hideout Intelligence Center level.</Description>
 
 		<!-- 修改这里指向你的 SPT 客户端根目录 -->
-		<GameRoot>D:\ExfilDelta</GameRoot>
+		<GameRoot>F:\TarKov\CH46284</GameRoot>
 		<OutDir>$(GameRoot)\BepInEx\plugins\BossDetect\</OutDir>
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
 		<AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>

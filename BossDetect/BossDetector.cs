@@ -59,7 +59,7 @@ namespace BossDetect
         private static GameWorld _currentGameWorld;
         private static int _intelLevel;
         private static float _lastScanTime;
-        private static float _lastManualNotifyTime = -1000f;
+        private static float _lastIntelNotifyTime = -1000f;
         private static bool _startNotified;
 
         public static void Init(ManualLogSource log)
@@ -117,7 +117,7 @@ namespace BossDetect
         {
             _currentGameWorld = gameWorld;
             _startNotified = false;
-            _lastManualNotifyTime = -1000f;
+            _lastIntelNotifyTime = -1000f;
             Roster.Clear();
             _intelLevel = ResolveIntelCenterLevel(myPlayer);
             LogDebug($"进入地图 {gameWorld.LocationId}，情报中心等级 = {_intelLevel}");
@@ -128,7 +128,7 @@ namespace BossDetect
             LogDebug("离开对局，清空 BOSS 花名册");
             _currentGameWorld = null;
             _startNotified = false;
-            _lastManualNotifyTime = -1000f;
+            _lastIntelNotifyTime = -1000f;
             Roster.Clear();
             _intelLevel = 0;
         }
@@ -219,7 +219,7 @@ namespace BossDetect
             if (_currentGameWorld == null) return;
 
             float cooldown = GetCooldownSeconds();
-            float elapsed = Time.time - _lastManualNotifyTime;
+            float elapsed = Time.time - _lastIntelNotifyTime;
             if (elapsed < cooldown)
             {
                 int remaining = Mathf.CeilToInt(cooldown - elapsed);
@@ -227,8 +227,6 @@ namespace BossDetect
                 LogDebug($"手动扫描冷却中，剩余 {remaining} 秒");
                 return;
             }
-
-            _lastManualNotifyTime = Time.time;
 
             if (!Singleton<GameWorld>.Instantiated) return;
             GameWorld gameWorld = Singleton<GameWorld>.Instance;
@@ -268,6 +266,9 @@ namespace BossDetect
                 LogDebug("情报中心等级不足(0)，不发送情报");
                 return;
             }
+
+            // 开局播报和手动扫描共用冷却；无目标或情报遗漏也消耗本次扫描。
+            _lastIntelNotifyTime = Time.time;
 
             int errorPercent = GetErrorRatePercent();
             int garblePercent = GetGarbleRatePercent();

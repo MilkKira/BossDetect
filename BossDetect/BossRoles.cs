@@ -11,7 +11,7 @@ namespace BossDetect
         // WTT 等自定义 BOSS 的角色名标记（按角色字符串包含关系匹配）
         private const string BlackFoxMarker = "black";
         private const string WedgeMarker = "wedge";
-        private const string MercenaryMarker = "mercenary";
+        private const string MercenaryMarker = "Odin";
 
         public static bool IsBoss(string role)
         {
