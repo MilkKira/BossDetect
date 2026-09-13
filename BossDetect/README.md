@@ -1,5 +1,7 @@
 # Boss Detect
 
+当前版本：**1.4.0**。
+
 独立的客户端 BepInEx 插件：把旧项目 `EFTBallisticCalculator` 里 `HUD/BossPanel.cs` 的客户端 BOSS 检测逻辑拆分出来，改为使用游戏内 Notify 通知，并按玩家藏身处**情报中心（Intelligence Center）**等级决定通知内容。
 
 ## 通知时机
@@ -25,9 +27,7 @@
 
 2 级距离档位（假设为"小于等于上限"）：`≤25m 很近`、`≤50m 近`、`≤75m 中近`、`≤100m 中`、`≤150m 中远`、`≤200m 远`、`>200m 很远`。
 
-特殊目标角色按角色字符串匹配：`black`（黑狐）、`wedge`（伟哥/Wedge）、`mercenary`（典狱长/Mercenary）。
-
-2 级距离档位（假设为"小于等于上限"）：`≤25m 很近`、`≤50m 近`、`≤75m 中近`、`≤100m 中`、`≤150m 中远`、`≤200m 远`、`>200m 很远`。
+特殊目标角色转为小写后按字符串包含关系匹配：`black`（黑狐）、`wedge`（伟哥/Wedge）、`odin`（典狱长/Odin）。
 
 ## 兼容目标
 
@@ -39,7 +39,7 @@
 
 ## 构建
 
-1. 打开 `BossDetect.csproj`，把 `<GameRoot>` 改成你的 SPT 客户端根目录（默认 `D:\BaiduSyncdisk\EscapeFromTarkovFiles`）。
+1. 进入 `BossDetect` 项目目录，打开 `BossDetect.csproj`，把 `<GameRoot>` 改成你的 SPT 客户端根目录（当前为 `F:\TarKov\CH46284`）。
 2. 构建 Release：
 
 ```powershell
@@ -55,6 +55,12 @@ dotnet build BossDetect.csproj -c Release -p:OutDir=build\Release\
 ## 安装
 
 把 `BossDetect.dll` 放到 `BepInEx\plugins\BossDetect\` 后启动游戏即可。插件不使用 BepInEx Config，所有参数都写死在代码里。
+
+## 1.4.0 更新
+
+- 开局播报与手动扫描共用冷却，冷却期间按 O 提示剩余秒数。
+- 修正典狱长 `Odin` 角色标记的大小写匹配。
+- 简化重复判断，补充关键函数中文注释，统一代码格式并清理文档。
 
 ## 写死参数（BossDetector.cs 顶部常量区）
 

@@ -20,7 +20,7 @@ namespace BossDetect
     /// </summary>
     public static class BossDetector
     {
-        // ============================ 写死参数（不使用 Config） ============================
+        // 固定参数（不使用 BepInEx Config）。
         private const KeyCode ManualScanKey = KeyCode.O;   // 手动扫描快捷键
         private static readonly bool DebugLogging = false;  // 调试日志开关（写死，改源码后重新编译）
 
@@ -34,9 +34,11 @@ namespace BossDetect
 
         private const int GarbleRatePercentLevel2 = 10;    // 2 级距离乱码率
         private const int GarbleRatePercentLevel3 = 2;     // 3 级距离乱码率
-        // ================================================================================
 
-        private class BossRecord
+        /// <summary>
+        /// 保存本局已发现目标的最近状态，供手动扫描和死亡播报使用。
+        /// </summary>
+        private sealed class BossRecord
         {
             public string Name;
             public bool Special;
@@ -67,15 +69,14 @@ namespace BossDetect
             _log = log;
         }
 
+        /// <summary>
+        /// 在 Unity 主线程维护战局状态，每秒更新目标记录，并处理开局播报和按键。
+        /// </summary>
         public static void Update()
         {
-            if (!Singleton<GameWorld>.Instantiated)
-            {
-                if (_currentGameWorld != null) OnRaidEnded();
-                return;
-            }
-
-            GameWorld gameWorld = Singleton<GameWorld>.Instance;
+            GameWorld gameWorld = Singleton<GameWorld>.Instantiated
+                ? Singleton<GameWorld>.Instance
+                : null;
             if (gameWorld == null)
             {
                 if (_currentGameWorld != null) OnRaidEnded();
@@ -113,6 +114,9 @@ namespace BossDetect
             }
         }
 
+        /// <summary>
+        /// 进入新战局时重置播报和目标记录，并读取本局情报中心等级。
+        /// </summary>
         private static void OnNewRaid(GameWorld gameWorld, Player myPlayer)
         {
             _currentGameWorld = gameWorld;
@@ -123,6 +127,9 @@ namespace BossDetect
             LogDebug($"进入地图 {gameWorld.LocationId}，情报中心等级 = {_intelLevel}");
         }
 
+        /// <summary>
+        /// 清除战局引用和缓存，避免下一局沿用旧目标或冷却时间。
+        /// </summary>
         private static void OnRaidEnded()
         {
             LogDebug("离开对局，清空 BOSS 花名册");
@@ -151,6 +158,10 @@ namespace BossDetect
             }
         }
 
+        /// <summary>
+        /// 更新可识别目标的距离与存活状态；从存活列表消失的目标按死亡或撤离处理。
+        /// 此处只维护记录，不发送通知，也不消耗情报冷却。
+        /// </summary>
         private static void ScanRoster(GameWorld gameWorld, Player myPlayer)
         {
             HashSet<string> seenProfileIds = new HashSet<string>();
@@ -214,6 +225,9 @@ namespace BossDetect
             }
         }
 
+        /// <summary>
+        /// 处理手动扫描：冷却中仅提示剩余秒数，冷却结束后刷新记录并播报。
+        /// </summary>
         private static void TryManualScan()
         {
             if (_currentGameWorld == null) return;
@@ -259,6 +273,10 @@ namespace BossDetect
             _ => 0
         };
 
+        /// <summary>
+        /// 按情报等级播报死亡和存活目标；有效情报扫描统一从此处开始冷却。
+        /// 无目标或概率性漏报同样消耗冷却，未建造情报中心则不播报。
+        /// </summary>
         private static void NotifyCurrentBosses()
         {
             if (_intelLevel < 1)
@@ -371,6 +389,9 @@ namespace BossDetect
             return new string(chars);
         }
 
+        /// <summary>
+        /// 从玩家藏身处读取情报中心等级；数据缺失或读取失败时按未建造处理。
+        /// </summary>
         private static int ResolveIntelCenterLevel(Player myPlayer)
         {
             try
@@ -400,6 +421,9 @@ namespace BossDetect
             }
         }
 
+        /// <summary>
+        /// 通过游戏原生通知显示文本，记录发送异常，避免中断后续帧更新。
+        /// </summary>
         private static void Notify(string message)
         {
             try
