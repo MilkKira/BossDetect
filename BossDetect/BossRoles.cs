@@ -4,14 +4,14 @@ namespace BossDetect
     /// BOSS 身份判定：
     /// 核心 Boss、邪教徒、圣诞老人、寻血猎犬、WTT 黑狐，以及少数不带 boss 前缀的特殊单位。
     /// 另区分普通 BOSS 与“特殊目标”（仅 3 级情报中心可识别）：
-    /// 黑狐(Black Fox)、伟哥(Wedge)、典狱长(Odin)。
+    /// 黑狐(Black Fox)、伟哥(Wedge)、典狱长(Mercenary)。
     /// </summary>
     public static class BossRoles
     {
         // WTT 等自定义 BOSS 的角色名标记（按角色字符串包含关系匹配）
         private const string BlackFoxMarker = "black";
         private const string WedgeMarker = "wedge";
-        private const string OdinMarker = "odin";
+        private const string OdinMarker = "mercenary";
 
         /// <summary>
         /// 按已转为小写的角色名识别 BOSS，包含自定义目标和指定随从。
@@ -39,7 +39,7 @@ namespace BossDetect
         }
 
         /// <summary>
-        /// 按已转为小写的角色名判定特殊目标：黑狐 / 伟哥(Wedge) / 典狱长(Odin)。
+        /// 按已转为小写的角色名判定特殊目标：黑狐 / 伟哥(Wedge) / 典狱长(Mercenary)。
         /// 1、2 级情报中心无法识别，3 级仅播报是否刷新、不显示位置。
         /// </summary>
         public static bool IsSpecialBoss(string role)
