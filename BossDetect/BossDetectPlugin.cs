@@ -11,7 +11,13 @@ namespace BossDetect
     {
         private void Awake()
         {
-            BossDetector.Init(Logger);
+            var debugLogging = Config.Bind(
+                "Debug",
+                "DebugLogging",
+                false,
+                "启用详细调试日志，输出战局状态、目标识别、冷却及情报判定信息。");
+
+            BossDetector.Init(Logger, debugLogging);
             Logger.LogInfo($"{PluginsInfo.NAME} {PluginsInfo.VERSION} loaded");
         }
 
