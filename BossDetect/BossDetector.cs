@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using BepInEx.Configuration;
 using BepInEx.Logging;
 using Comfort.Common;
 using EFT;
@@ -16,13 +17,12 @@ namespace BossDetect
     /// - 检测限制：1、2 级无法识别特殊目标（黑狐/伟哥/典狱长），3 级仅播报是否刷新、不显示位置。
     /// - 附加能力：1 级不能检测 BOSS 死亡；2、3 级可在扫描时播报死亡。
     /// - 乱码：2 级 10%、3 级 2% 概率距离以乱码形式描述（通知无法滚动，按静态乱码呈现）。
-    /// - 所有参数写死在下方常量区，不使用 BepInEx Config。
+    /// - 玩法参数固定；Debug 日志开关通过 BepInEx Config 配置。
     /// </summary>
     public static class BossDetector
     {
         // 固定参数（不使用 BepInEx Config）。
         private const KeyCode ManualScanKey = KeyCode.O;   // 手动扫描快捷键
-        private static readonly bool DebugLogging = false;  // 调试日志开关（写死，改源码后重新编译）
 
         private const float CooldownSecondsLevel1 = 120f;  // 1 级情报中心冷却
         private const float CooldownSecondsLevel2 = 90f;   // 2 级情报中心冷却
@@ -58,15 +58,20 @@ namespace BossDetect
         private static readonly Dictionary<string, BossRecord> Roster = new Dictionary<string, BossRecord>();
 
         private static ManualLogSource _log;
+        private static ConfigEntry<bool> _debugLogging;
         private static GameWorld _currentGameWorld;
         private static int _intelLevel;
         private static float _lastScanTime;
         private static float _lastIntelNotifyTime = -1000f;
         private static bool _startNotified;
 
-        public static void Init(ManualLogSource log)
+        /// <summary>
+        /// 保存日志与调试配置引用，输出时读取配置当前值以支持运行中切换。
+        /// </summary>
+        public static void Init(ManualLogSource log, ConfigEntry<bool> debugLogging)
         {
             _log = log;
+            _debugLogging = debugLogging;
         }
 
         /// <summary>
@@ -288,6 +293,7 @@ namespace BossDetect
             // 开局播报和手动扫描共用冷却；无目标或情报遗漏也消耗本次扫描。
             _lastIntelNotifyTime = Time.time;
 
+            bool hasBossNotification = false;
             int errorPercent = GetErrorRatePercent();
             int garblePercent = GetGarbleRatePercent();
 
@@ -301,6 +307,7 @@ namespace BossDetect
                         record.DeathNotified = true;
                         LogDebug($"播报 BOSS 死亡：{record.Name}");
                         Notify(string.Format(NotifyText.BossDead, record.Name));
+                        hasBossNotification = true;
                     }
                 }
             }
@@ -321,11 +328,13 @@ namespace BossDetect
                     case 1:
                         // 仅提示该区域是否刷新 BOSS，不含位置/距离
                         Notify(string.Format(NotifyText.Level1, record.Name));
+                        hasBossNotification = true;
                         break;
 
                     case 2:
                         string tier = MaybeGarble(TierWords[DistanceTier(record.LastDistance)], garblePercent);
                         Notify(string.Format(NotifyText.Level2, record.Name, tier));
+                        hasBossNotification = true;
                         break;
 
                     case 3:
@@ -339,8 +348,16 @@ namespace BossDetect
                             string distance = MaybeGarble(Mathf.RoundToInt(record.LastDistance).ToString(), garblePercent);
                             Notify(string.Format(NotifyText.Level3, record.Name, distance));
                         }
+                        hasBossNotification = true;
                         break;
                 }
+            }
+
+            // 按本次情报结果兜底：没有目标或全部概率漏报时，也给出扫描反馈。
+            if (!hasBossNotification)
+            {
+                Notify(NotifyText.NoBossFound);
+                LogDebug("本次没有 BOSS 情报，发送未发现提示");
             }
         }
 
@@ -442,9 +459,10 @@ namespace BossDetect
 
         private static void LogDebug(string message)
         {
-            if (DebugLogging)
+            if (_debugLogging?.Value == true)
             {
-                _log.LogInfo($"[BossDetect] {message}");
+                // 使用 Info 级别，确保只开启此配置即可在默认日志过滤设置下看到调试信息。
+                _log.LogInfo($"[BossDetect][Debug] {message}");
             }
         }
     }

@@ -15,6 +15,7 @@
 
 - **情报错误定义**：战局实际已刷新对应 BOSS，但情报有概率不推送刷新提示；多个 BOSS 同时刷新时，每个 BOSS 独立计算错误概率。
 - **乱码距离**：距离远近（2 级）/ 距离数值（3 级）有概率以乱码形式呈现（通知无法真正滚动，按同长度静态乱码模拟干扰）。
+- **无目标提示**：情报中心至少 1 级时，若本次扫描没有播报任何 BOSS 或死亡信息，则提示 `未发现任何BOSS`，包括没有可识别目标、全部存活目标因概率漏报而未显示，以及死亡信息已播报过的情况。开局播报和手动扫描均适用；等级限制与冷却仍然生效。
 
 ## 等级规则
 
@@ -54,7 +55,18 @@ dotnet build BossDetect.csproj -c Release -p:OutDir=build\Release\
 
 ## 安装
 
-把 `BossDetect.dll` 放到 `BepInEx\plugins\BossDetect\` 后启动游戏即可。插件不使用 BepInEx Config，所有参数都写死在代码里。
+把 `BossDetect.dll` 放到 `BepInEx\plugins\BossDetect\` 后启动游戏即可。玩法参数固定在代码中，Debug 日志开关使用 BepInEx Config。
+
+## Debug 配置
+
+首次启动插件后生成 `BepInEx\config\com.mochix2milk.bossdetect.cfg`，默认关闭调试日志：
+
+```ini
+[Debug]
+DebugLogging = false
+```
+
+改为 `true` 并重启游戏，或通过配置管理器在运行中切换，即可输出战局状态、目标识别、冷却与情报判定日志。调试消息带有 `[BossDetect][Debug]` 前缀，使用 Info 级别写入 `BepInEx\LogOutput.log`，无需额外开启 BepInEx 的 Debug 级别过滤。
 
 ## 1.4.0 更新
 
@@ -75,6 +87,5 @@ dotnet build BossDetect.csproj -c Release -p:OutDir=build\Release\
 | 3级情报错误率 | 0% | 3 级不推送刷新提示的概率（每 BOSS 独立） |
 | 2级距离乱码率 | 10% | 2 级距离远近描述乱码的概率 |
 | 3级距离乱码率 | 2% | 3 级普通 BOSS 距离数值乱码的概率 |
-| 调试日志 | 关 | 输出详细日志 |
 
 注意：如果同时安装了其他 BOSS 通知插件（如 `BossNotifier.dll`），两者会各自弹通知，建议只保留其一。

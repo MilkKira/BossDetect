@@ -16,6 +16,7 @@ namespace BossDetect
         public const string Level3 = "检测到BOSS {0}，距离您 {1}m";
         public const string Level3Special = "检测到特殊目标 {0}";
         public const string BossDead = "BOSS {0} 已死亡";
+        public const string NoBossFound = "未发现任何BOSS";
         public const string Cooldown = "扫描仍在冷却中...请在{0}秒后重试";
     }
 }
