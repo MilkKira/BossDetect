@@ -289,9 +289,16 @@ namespace BossDetect
         /// </summary>
         private static void NotifyCurrentBosses()
         {
-            if (_intelLevel < 1 || !_isDynamoRunning)
+            if (!_isDynamoRunning)
             {
-                LogDebug("情报中心等级不足亦或发电机未启动，无法检测");
+                Notify(NotifyText.NoPower);
+                LogDebug("发电机未发电，无法检测");
+                return;
+            }
+
+            if (_intelLevel < 1)
+            {
+                LogDebug("情报中心等级不足，无法检测");
                 return;
             }
 

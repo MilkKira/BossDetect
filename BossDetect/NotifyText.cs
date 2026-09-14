@@ -18,5 +18,6 @@ namespace BossDetect
         public const string BossDead = "BOSS {0} 已死亡";
         public const string NoBossFound = "未发现任何BOSS";
         public const string Cooldown = "扫描仍在冷却中...请在{0}秒后重试";
+        public const string NoPower = "藏身处情报中心缺少所需电力";
     }
 }
