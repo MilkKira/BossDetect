@@ -1,6 +1,6 @@
 # Boss Detect
 
-当前版本：**1.4.0**。
+当前版本：**1.5.0**。
 
 独立的客户端 BepInEx 插件：把旧项目 `EFTBallisticCalculator` 里 `HUD/BossPanel.cs` 的客户端 BOSS 检测逻辑拆分出来，改为使用游戏内 Notify 通知，并按玩家藏身处**情报中心（Intelligence Center）**等级决定通知内容。
 
@@ -13,6 +13,7 @@
 
 ## 通用规则
 
+- **发电机要求**：入局时检查发电机已建造、开关开启且至少一个燃料槽内有剩余燃料；本局沿用该检查结果，不满足时不播报情报、不消耗扫描冷却。
 - **情报错误定义**：战局实际已刷新对应 BOSS，但情报有概率不推送刷新提示；多个 BOSS 同时刷新时，每个 BOSS 独立计算错误概率。
 - **乱码距离**：距离远近（2 级）/ 距离数值（3 级）有概率以乱码形式呈现（通知无法真正滚动，按同长度静态乱码模拟干扰）。
 
@@ -55,6 +56,10 @@ dotnet build BossDetect.csproj -c Release -p:OutDir=build\Release\
 ## 安装
 
 把 `BossDetect.dll` 放到 `BepInEx\plugins\BossDetect\` 后启动游戏即可。插件不使用 BepInEx Config，所有参数都写死在代码里。
+
+## 1.5.0 更新
+
+- 新增入局发电机检测：已建造、开关开启且有剩余燃料时才允许播报情报，本局沿用入局检查结果。
 
 ## 1.4.0 更新
 

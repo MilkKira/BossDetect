@@ -4,6 +4,7 @@ using BepInEx.Logging;
 using Comfort.Common;
 using EFT;
 using EFT.Communications;
+using EFT.InventoryLogic;
 using UnityEngine;
 
 namespace BossDetect
@@ -20,7 +21,7 @@ namespace BossDetect
     /// </summary>
     public static class BossDetector
     {
-        // 固定参数（不使用 BepInEx Config）。
+        // 固定参数
         private const KeyCode ManualScanKey = KeyCode.O;   // 手动扫描快捷键
         private static readonly bool DebugLogging = false;  // 调试日志开关（写死，改源码后重新编译）
 
@@ -63,6 +64,7 @@ namespace BossDetect
         private static float _lastScanTime;
         private static float _lastIntelNotifyTime = -1000f;
         private static bool _startNotified;
+        private static bool _isDynamoRunning;
 
         public static void Init(ManualLogSource log)
         {
@@ -124,7 +126,8 @@ namespace BossDetect
             _lastIntelNotifyTime = -1000f;
             Roster.Clear();
             _intelLevel = ResolveIntelCenterLevel(myPlayer);
-            LogDebug($"进入地图 {gameWorld.LocationId}，情报中心等级 = {_intelLevel}");
+            _isDynamoRunning = ResolveDynamoRunning(myPlayer);
+            LogDebug($"进入地图 {gameWorld.LocationId}，情报中心等级 = {_intelLevel} 发电机状态: {_isDynamoRunning}");
         }
 
         /// <summary>
@@ -138,6 +141,7 @@ namespace BossDetect
             _lastIntelNotifyTime = -1000f;
             Roster.Clear();
             _intelLevel = 0;
+            _isDynamoRunning = false;
         }
 
         /// <summary>
@@ -274,14 +278,15 @@ namespace BossDetect
         };
 
         /// <summary>
+        /// 核心方法
         /// 按情报等级播报死亡和存活目标；有效情报扫描统一从此处开始冷却。
         /// 无目标或概率性漏报同样消耗冷却，未建造情报中心则不播报。
         /// </summary>
         private static void NotifyCurrentBosses()
         {
-            if (_intelLevel < 1)
+            if (_intelLevel < 1 || !_isDynamoRunning)
             {
-                LogDebug("情报中心等级不足(0)，不发送情报");
+                LogDebug("情报中心等级不足亦或发电机未启动，无法检测");
                 return;
             }
 
@@ -418,6 +423,59 @@ namespace BossDetect
             {
                 LogDebug($"读取情报中心等级失败：{e.Message}");
                 return 0;
+            }
+        }
+
+        /// <summary>
+        /// 入局时检查发电机已建造、开关开启且燃料槽中有剩余燃料；读取失败按未运行处理。
+        /// </summary>
+        private static bool ResolveDynamoRunning(Player myPlayer)
+        {
+            try
+            {
+                var areas = myPlayer?.Profile?.Hideout?.Areas;
+                if (areas == null)
+                {
+                    LogDebug("Profile 中没有藏身处数据，发电机按未运行处理");
+                    return false;
+                }
+
+                foreach (var area in areas)
+                {
+                    if (area != null && area.AreaType == EAreaType.Generator)
+                    {
+                        if (area.Level <= 0 || !area.Active || area.Slots == null)
+                            return false;
+
+                        if (!Singleton<ItemFactoryClass>.Instantiated)
+                            return false;
+
+                        foreach (var slot in area.Slots)
+                        {
+                            if (slot?.Items == null || slot.Items.Length == 0) continue;
+
+                            // 与游戏发电机初始化一致，通过物品工厂还原燃料及其剩余资源。
+                            var items = Singleton<ItemFactoryClass>.Instance.FlatItemsToTree(slot.Items).Items;
+                            foreach (var item in items.Values)
+                            {
+                                if (item is FuelItemClass fuel &&
+                                    fuel.ResourceHolderComponent is ResourceComponent resource &&
+                                    resource.Value > 0f)
+                                    return true;
+                            }
+                        }
+
+                        return false;
+                    }
+                }
+
+                LogDebug("未找到发电机设施，按未运行处理");
+                return false;
+            }
+            catch (Exception e)
+            {
+                LogDebug($"读取发电机运行状态失败：{e.Message}");
+                return false;
             }
         }
 
