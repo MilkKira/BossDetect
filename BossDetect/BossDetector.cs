@@ -66,6 +66,7 @@ namespace BossDetect
         private static float _lastIntelNotifyTime = -1000f;
         private static bool _startNotified;
         private static bool _isDynamoRunning;
+        private static bool _dynamoStateResolved;
 
         /// <summary>
         /// 保存日志与调试配置引用，输出时读取配置当前值以支持运行中切换。
@@ -98,6 +99,12 @@ namespace BossDetect
                 OnNewRaid(gameWorld, myPlayer);
             }
 
+            // 藏身处数据可能在进入 GameWorld 后仍在加载，倒计时结束后再读取；失败时逐帧重试。
+            if (!_dynamoStateResolved && IsCountdownOver())
+            {
+                TryResolveHideoutState(myPlayer);
+            }
+
             // 定期维护花名册（只更新数据，不自动发情报）
             if (Time.time - _lastScanTime >= 1f)
             {
@@ -106,11 +113,12 @@ namespace BossDetect
             }
 
             // 开局播报：倒计时结束后自动执行一次情报
-            if (!_startNotified && IsCountdownOver())
+            if (!_startNotified && IsCountdownOver() && _dynamoStateResolved)
             {
                 _startNotified = true;
                 ScanRoster(gameWorld, myPlayer);
                 LogDebug("倒计时结束，发送开局 BOSS 情报");
+
                 NotifyCurrentBosses();
             }
 
@@ -131,8 +139,9 @@ namespace BossDetect
             _lastIntelNotifyTime = -1000f;
             Roster.Clear();
             _intelLevel = ResolveIntelCenterLevel(myPlayer);
-            _isDynamoRunning = ResolveDynamoRunning(myPlayer);
-            LogDebug($"进入地图 {gameWorld.LocationId}，情报中心等级 = {_intelLevel} 发电机状态: {_isDynamoRunning}");
+            _isDynamoRunning = false;
+            _dynamoStateResolved = false;
+            LogDebug($"进入地图 {gameWorld.LocationId}，情报中心等级 = {_intelLevel}，发电机状态将在倒计时结束后读取");
         }
 
         /// <summary>
@@ -147,6 +156,7 @@ namespace BossDetect
             Roster.Clear();
             _intelLevel = 0;
             _isDynamoRunning = false;
+            _dynamoStateResolved = false;
         }
 
         /// <summary>
@@ -289,6 +299,12 @@ namespace BossDetect
         /// </summary>
         private static void NotifyCurrentBosses()
         {
+            if (!_dynamoStateResolved)
+            {
+                LogDebug("发电机状态尚未读取完成，暂不检测");
+                return;
+            }
+
             if (!_isDynamoRunning)
             {
                 Notify(NotifyText.NoPower);
@@ -451,54 +467,95 @@ namespace BossDetect
         }
 
         /// <summary>
-        /// 入局时检查发电机已建造、开关开启且燃料槽中有剩余燃料；读取失败按未运行处理。
+        /// 在倒计时结束后读取本局藏身处状态；数据未就绪时返回 false，由调用方继续重试。
         /// </summary>
-        private static bool ResolveDynamoRunning(Player myPlayer)
+        private static bool TryResolveHideoutState(Player myPlayer)
         {
+            if (_dynamoStateResolved) return true;
+
+            if (!TryResolveDynamoRunning(myPlayer, out bool isDynamoRunning))
+                return false;
+
+            _isDynamoRunning = isDynamoRunning;
+            _dynamoStateResolved = true;
+            _intelLevel = ResolveIntelCenterLevel(myPlayer);
+            LogDebug($"本局藏身处状态已确认：情报中心等级 = {_intelLevel}，发电机状态 = {_isDynamoRunning}");
+            return true;
+        }
+
+        /// <summary>
+        /// 检查发电机已建造、开关开启且燃料槽中有剩余燃料。
+        /// false 仅表示藏身处/物品数据尚未就绪，不代表发电机未运行。
+        /// </summary>
+        private static bool TryResolveDynamoRunning(Player myPlayer, out bool isDynamoRunning)
+        {
+            isDynamoRunning = false;
+
             try
             {
                 var areas = myPlayer?.Profile?.Hideout?.Areas;
                 if (areas == null)
                 {
-                    LogDebug("Profile 中没有藏身处数据，发电机按未运行处理");
+                    LogDebug("Profile 中尚无藏身处数据，发电机状态将重试读取");
                     return false;
                 }
 
                 foreach (var area in areas)
                 {
-                    if (area != null && area.AreaType == EAreaType.Generator)
+                    if (area == null || area.AreaType != EAreaType.Generator) continue;
+
+                    if (!Singleton<ItemFactoryClass>.Instantiated)
                     {
-                        if (area.Level <= 0 || !area.Active || area.Slots == null)
-                            return false;
-
-                        if (!Singleton<ItemFactoryClass>.Instantiated)
-                            return false;
-
-                        foreach (var slot in area.Slots)
-                        {
-                            if (slot?.Items == null || slot.Items.Length == 0) continue;
-
-                            // 与游戏发电机初始化一致，通过物品工厂还原燃料及其剩余资源。
-                            var items = Singleton<ItemFactoryClass>.Instance.FlatItemsToTree(slot.Items).Items;
-                            foreach (var item in items.Values)
-                            {
-                                if (item is FuelItemClass fuel &&
-                                    fuel.ResourceHolderComponent is ResourceComponent resource &&
-                                    resource.Value > 0f)
-                                    return true;
-                            }
-                        }
-
+                        LogDebug("物品工厂尚未就绪，发电机状态将重试读取");
                         return false;
                     }
+
+                    if (area.Level <= 0)
+                    {
+                        LogDebug("发电机未建造");
+                        return true;
+                    }
+
+                    if (!area.Active)
+                    {
+                        LogDebug("发电机开关未开启");
+                        return true;
+                    }
+
+                    if (area.Slots == null)
+                    {
+                        LogDebug("发电机燃料槽数据缺失");
+                        return true;
+                    }
+
+                    foreach (var slot in area.Slots)
+                    {
+                        if (slot?.Items == null || slot.Items.Length == 0) continue;
+
+                        // 与游戏发电机初始化一致，通过物品工厂还原燃料及其剩余资源。
+                        var items = Singleton<ItemFactoryClass>.Instance.FlatItemsToTree(slot.Items).Items;
+                        foreach (var item in items.Values)
+                        {
+                            if (item is FuelItemClass fuel &&
+                                fuel.ResourceHolderComponent is ResourceComponent resource &&
+                                resource.Value > 0f)
+                            {
+                                isDynamoRunning = true;
+                                return true;
+                            }
+                        }
+                    }
+
+                    LogDebug("发电机已开启，但燃料槽中没有剩余燃料");
+                    return true;
                 }
 
-                LogDebug("未找到发电机设施，按未运行处理");
-                return false;
+                LogDebug("未找到发电机设施");
+                return true;
             }
             catch (Exception e)
             {
-                LogDebug($"读取发电机运行状态失败：{e.Message}");
+                LogDebug($"读取发电机运行状态失败，将重试：{e.Message}");
                 return false;
             }
         }
